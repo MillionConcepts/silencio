@@ -125,7 +125,7 @@ def match_drivefile_title(
 
 
 def stamp() -> str:
-    return dt.datetime.now().isoformat()[:19]
+    return dt.datetime.utcnow().isoformat()[:19]
 
 
 def process_match_group(
