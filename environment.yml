@@ -1,0 +1,8 @@
+name: silencio
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - pydrive2
+  - python-dateutil

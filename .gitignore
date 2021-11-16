@@ -127,3 +127,13 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# development 
+*scratch.py
+*scratch.ipynb
+
+# secrets
+secrets/
+
+# pycharm
+.idea/
