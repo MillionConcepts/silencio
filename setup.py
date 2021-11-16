@@ -15,6 +15,6 @@ setup(
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[
-        "pip", "pydrive2", "python-dateutil"
+        "dustgoggles", "pip", "pydrive2", "python-dateutil"
     ],
 )
