@@ -136,7 +136,7 @@ def process_match_group(
 ) -> list:
     if len(files) > 1:
         message = (
-            f"{stamp()} refusing to sync duplicates of {current_path}/{fn}"
+            f"{stamp()} refusing to sync duplicates of {current_path}/{fn}\n"
         )
         print(message)
         with open(settings["logfile"], "a+") as logfile:
