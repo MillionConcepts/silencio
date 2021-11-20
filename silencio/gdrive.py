@@ -171,12 +171,17 @@ def copy_gdrive(
     matcher = partial(match_drivefile_title, pattern=patterns["file"])
     matches = list(filter(matcher, files))
     saved_files = []
+    local_path = Path(settings["local_root"], current_path)
     if any(matches):
-        os.makedirs(Path(settings["local_root"], current_path), exist_ok=True)
-    for fn, grouper in groupby(matches, lambda m: m["title"]):
-        saved_files += process_match_group(
-            fn, list(grouper), current_path, settings
-        )
+        os.makedirs(local_path, exist_ok=True)
+    filenames, groups = group_files(matches)
+    # doing this to filter duplicates -- the google drive "filesystem"
+    # (it's not) is allowed duplicate "titles", but our local filesystem of
+    # course is not
+    for fn, group in zip(filenames, groups):
+        saved_files += process_match_group(fn, group, current_path, settings)
+    if local_path.exists() and (settings["remove_extras"] is True):
+        delete_extras(filenames, local_path)
     for folder in folders:
         path = Path(current_path, folder["title"])
         if "folder" in patterns.keys():
@@ -184,3 +189,19 @@ def copy_gdrive(
                 continue
         saved_files += copy_gdrive(bot, folder["id"], patterns, settings, path)
     return saved_files
+
+
+def group_files(matches):
+    filenames, gdrive_file_groups = [], []
+    file_match_groups = groupby(matches, lambda m: m["title"])
+    for fn, file_group in file_match_groups:
+        filenames.append(fn)
+        gdrive_file_groups.append(list(file_group))
+    return filenames, gdrive_file_groups
+
+
+def delete_extras(filenames, local_path):
+    for file in local_path.iterdir():
+        if file.is_file() and file.name not in filenames:
+            print(f"deleting {file} not found in remote")
+            file.unlink()
