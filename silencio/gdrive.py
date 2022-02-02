@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import Union, Optional, Sequence, Any, Mapping
 
-from pydrive2.files import GoogleDriveFile
+from pydrive2.files import GoogleDriveFile, ApiRequestError
 from typing_extensions import TypeAlias
 
 import dateutil.parser as dtp
@@ -50,6 +50,7 @@ class DriveBot(GoogleDrive):
         pattern: Union[str, re.Pattern] = None,
         root_path: GoogleDriveId = None,
         verbose: bool = False,
+        tree=False,
     ) -> list[GoogleDriveFile]:
         # faster...but everything.
         print("ROOT: " + root_path)
@@ -75,8 +76,14 @@ class DriveBot(GoogleDrive):
         matches = list(filter(matcher, contents))
         if verbose and matches:
             list(map(lambda x: print(x["title"]), matches))
+        if tree is True:
+            matches = {'.': matches}
         for folder in filter(is_drive_folder, contents):
-            matches += self.find(pattern, folder["id"], verbose)
+            search = self.find(pattern, folder["id"], verbose, tree)
+            if tree is True:
+                matches |= {folder['title']: search}
+            else:
+                matches += search
         return matches
 
     def cp(self, source_path: Pathlike, target_folder: str):
@@ -155,8 +162,15 @@ def process_match_group(
             return []
     if settings.get("verbose") is True:
         print(f"copying {current_path}/{fn} to local")
-    files[0].GetContentFile(str(local))
-    return [local]
+    try:
+        files[0].GetContentFile(str(local))
+        return [local]
+    except ApiRequestError as api_request_error:
+        message = f"{stamp()} retrieval failed: {api_request_error}\n"
+        print(message)
+        with open(settings["logfile"], "a+") as logfile:
+            logfile.write(message)
+        return []
 
 
 def copy_gdrive(
