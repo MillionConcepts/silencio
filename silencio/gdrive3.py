@@ -4,7 +4,7 @@ from functools import partial
 from io import BytesIO
 from operator import attrgetter
 from pathlib import Path
-from typing import Callable, Iterator, Sequence, Optional
+from typing import Callable, Iterator, Sequence, Optional, Mapping, Union
 
 from cytoolz import first, keyfilter
 from dustgoggles.pivot import split_on
@@ -115,6 +115,12 @@ class DriveBot:
         """
         get_method = self.files().get_media
         return self._get_csv(get_method, name, file_id, to_pandas)
+
+    def read_file(self, file_id, defer=False):
+        request = self.files().get_media(fileId=file_id)
+        if defer is True:
+            return request
+        return request.execute()
 
     # TODO: allow updating an existing file by path name
     def df_to_drive_csv(
@@ -231,6 +237,7 @@ class DriveScanner(Iterator):
             "parents",
             "size",
             "owners",
+            "modifiedTime",
             "md5Checksum",
         ),
         page_size: int = 1000,
@@ -266,9 +273,7 @@ class DriveScanner(Iterator):
         }
 
     def make_manifest(self) -> tuple[pd.DataFrame, pd.DataFrame]:
-        manifest = pd.DataFrame.from_records(self.results)[
-            ["id", "name", "parents", "size"]
-        ]
+        manifest = pd.DataFrame.from_records(self.results)
         manifest = manifest.dropna(subset=["parents"])
         manifest["parents"] = manifest["parents"].str.join("")
         directory_ids = manifest["parents"].unique()
@@ -326,3 +331,35 @@ class DriveScanner(Iterator):
 
 def ls_fs_dict(folder_name, fs_dict):
     return keyfilter(lambda fn: str(Path(fn).parent) == folder_name, fs_dict)
+
+
+def copy_gdrive(
+    bot: DriveBot,
+    drive_folder_id: str,
+    patterns: Mapping[str, Union[str, re.Pattern]],
+    settings: Mapping[str, str],
+    current_path: Path = Path("."),
+) -> list[Path]:
+    contents = bot.ls(folder_id=drive_folder_id)
+    # folders, files = separate_by(contents, is_drive_folder)
+    # matcher = partial(match_drivefile_title, pattern=patterns["file"])
+    # matches = list(filter(matcher, files))
+    # saved_files = []
+    # local_path = Path(settings["local_root"], current_path)
+    # if any(matches):
+    #     os.makedirs(local_path, exist_ok=True)
+    # filenames, groups = group_files(matches)
+    # # doing this to filter duplicates -- the google drive "filesystem"
+    # # (it's not) is allowed duplicate "titles", but our local filesystem of
+    # # course is not
+    # for fn, group in zip(filenames, groups):
+    #     saved_files += process_match_group(fn, group, current_path, settings)
+    # if local_path.exists() and (settings["remove_extras"] is True):
+    #     delete_extras(filenames, local_path)
+    # for folder in folders:
+    #     path = Path(current_path, folder["title"])
+    #     if "folder" in patterns.keys():
+    #         if not re.match(patterns["folder"], str(path)):
+    #             continue
+    #     saved_files += copy_gdrive(bot, folder["id"], patterns, settings, path)
+    # return saved_files
