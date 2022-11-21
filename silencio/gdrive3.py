@@ -241,7 +241,17 @@ class DriveScanner(Iterator):
             "md5Checksum",
         ),
         page_size: int = 1000,
+        shared_drive_id = None
     ):
+        if shared_drive_id is not None:
+            self.extra_parameters = {
+                "includeItemsFromAllDrives": True,
+                "supportsAllDrives": True,
+                "driveId": shared_drive_id,
+                "corpora": "drive"
+            }
+        else:
+            self.extra_parameters = {}
         self.drivebot = drivebot
         self.results = []
         self.page_token = None
@@ -270,6 +280,7 @@ class DriveScanner(Iterator):
             "q": self.query,
             "fields": f"nextPageToken, files({','.join(self.fields)})",
             "pageToken": self.page_token,
+            **self.extra_parameters
         }
 
     def make_manifest(self) -> tuple[pd.DataFrame, pd.DataFrame]:
