@@ -11,8 +11,9 @@ from dustgoggles.pivot import split_on
 import googleapiclient.discovery as discovery
 import pandas as pd
 from googleapiclient.errors import BatchError
-from googleapiclient.http import MediaInMemoryUpload
+from googleapiclient.http import MediaInMemoryUpload, MediaFileUpload
 from oauth2client.client import AssertionCredentials
+import sh
 
 from silencio.treeutils import (
     add_files_to_segmented_trees,
@@ -22,6 +23,16 @@ from silencio.treeutils import (
 )
 
 
+MIMETYPE = re.compile(r"\s+(\w+/\w+)\n")
+
+
+def infer_mimetype(path: Union[str, Path]) -> str:
+    try:
+        return re.search(MIMETYPE, sh.file(str(path), mime_type=True)).group(1)
+    except AttributeError:
+        return "application/octet-stream"
+
+
 class DriveResource(discovery.Resource):
     about: Callable
     files: Callable
@@ -29,18 +40,24 @@ class DriveResource(discovery.Resource):
 
 
 class DriveBot:
-    def __init__(self, creds: AssertionCredentials):
+    def __init__(self, creds: AssertionCredentials, shared_drive_id=None):
         self.resource: DriveResource = discovery.build(
             "drive", "v3", credentials=creds
         )
         self.about = self.resource.about
         self.files = self.resource.files
         self.new_batch_http_request = self.resource.new_batch_http_request
-        self.scanner = DriveScanner(self)
         self.filesystem = {}
         self.collisions = {}
         self.root_id = ""
         self.batches = []
+        self.shared_drive_id = shared_drive_id
+        if self.shared_drive_id is not None:
+            self.extra_parameters = {"supportsAllDrives": True}
+        else:
+            self.extra_parameters = {}
+        self.scanner = DriveScanner(self)
+        self.temp_filesystem = {}
 
     def scan(self, force=False, verbose=True):
         if (self.scanner.complete is True) and (force is False):
@@ -61,8 +78,8 @@ class DriveBot:
     def ls(self, folder_name=None, folder_id=None, return_collisions=False):
         folder_name, folder_id = self._pick_name_id(folder_name, folder_id)
         if folder_id is not None:
-            files, collisions, _ = DriveScanner(
-                self, f"'{folder_id}' in parents"
+            files, collisions, root_id = DriveScanner(
+                self, f"'{folder_id}' in parents and trashed=false"
             ).extract_filesystem()
         else:
             files = ls_fs_dict(folder_name, self.filesystem)
@@ -155,24 +172,51 @@ class DriveBot:
             return request
         return request.execute()
 
+    def put(
+        self,
+        source: Union[str, Path],
+        folder_name: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        defer: bool = False,
+        mimetype: Optional[str] = None
+    ):
+        folder_id = self._pick_id(folder_name, folder_id)
+        mimetype = mimetype if mimetype is not None else infer_mimetype(source)
+        request = self.files().create(
+            body={
+                 'name': Path(source).name, 'parents': [folder_id]
+            },
+            media_body=MediaFileUpload(source, mimetype=mimetype),
+            **self.extra_parameters
+        )
+        if defer is True:
+            return request
+        return request.execute()
+
     def mv(
         self,
-        name=None,
-        target=None,
-        defer=False
+        name: Optional[str] = None,
+        file_id: Optional[str] = None,
+        folder_name: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        defer: bool = False
     ):
-        parameters = {}
-        if Path(target).is_file():
-            parameters['addParents'] = self.filesystem[
-                str(Path(target).parent)
-            ]
-            parameters['body'] = {}
-            parameters['body']['name'] = str(Path(target).name)
-        else:
-            parameters['addParents'] = self.filesystem[target]
-        parameters['removeParents'] = str(Path(self.filesystem[name]).parent)
-        parameters['fileId'] = self.filesystem[name]
-        request = self.files().update(**parameters)
+        file_id = self._pick_id(name, file_id)
+        folder_id = self._pick_id(folder_name, folder_id)
+        parameters = {'addParents': folder_id, 'fileId': file_id}
+        if name is not None:
+            try:
+                parameters['removeParents'] = str(Path(self.filesystem[name]).parent)
+            except KeyError:
+                pass
+        if 'removeParents' not in parameters:
+            request = self.files().get(
+                fileId=file_id,
+                fields='parents',
+                **self.extra_parameters
+            )
+            parameters['removeParents'] = request.execute()['parents'][0]
+        request = self.files().update(**parameters, **self.extra_parameters)
         if defer is True:
             return request
         return request.execute()
@@ -241,15 +285,15 @@ class DriveScanner(Iterator):
             "md5Checksum",
         ),
         page_size: int = 1000,
-        shared_drive_id = None
     ):
-        if shared_drive_id is not None:
+        if drivebot.shared_drive_id is not None:
             self.extra_parameters = {
                 "includeItemsFromAllDrives": True,
                 "supportsAllDrives": True,
-                "driveId": shared_drive_id,
+                "driveId": drivebot.shared_drive_id,
                 "corpora": "drive"
             }
+            self.shared_drive_id = drivebot.shared_drive_id
         else:
             self.extra_parameters = {}
         self.drivebot = drivebot
@@ -287,9 +331,9 @@ class DriveScanner(Iterator):
         manifest = pd.DataFrame.from_records(self.results)
         manifest = manifest.dropna(subset=["parents"])
         manifest["parents"] = manifest["parents"].str.join("")
-        directory_ids = manifest["parents"].unique()
         self.directories, self.files = split_on(
-            manifest, manifest["id"].isin(directory_ids)
+            manifest,
+            manifest["mimeType"] == 'application/vnd.google-apps.folder'
         )
         return self.directories, self.files
 
@@ -302,6 +346,8 @@ class DriveScanner(Iterator):
         return self.trees
 
     def extract_filesystem(self, root_id=None):
+        if self.complete is False:
+            self.get()
         if len(self.trees) == 0:
             self.get_file_trees()
         if root_id is None:

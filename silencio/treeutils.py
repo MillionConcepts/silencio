@@ -75,14 +75,16 @@ def pick_disjoint_set(entry, value_set_mapping):
     return None
 
 
-def add_files_to_directory_tree(tree, files):
-    ix = 0
+def add_files_to_directory_tree(tree, files, root):
     for parent_id, contents in files.groupby("parents"):
-        if parent_id not in tree.keys():
+        if parent_id == root:
+            parent_path = ""
+        elif parent_id not in tree.keys():
             continue
-        parent_path = tree[parent_id]
+        else:
+            parent_path = f"{tree[parent_id]}/"
         for _, row in contents.iterrows():
-            path = f"{parent_path}/{row['name']}"
+            path = f"{parent_path}{row['name']}"
             tree[row["id"]] = path
     return tree
 
@@ -93,8 +95,7 @@ def add_files_to_segmented_trees(segments, files):
     )
     segment_membership = files["parents"].map(segmenter)
     for root, tree_files in files.groupby(segment_membership):
-        tree = add_files_to_directory_tree(segments[root], tree_files)
-        print(root, len(tree))
+        add_files_to_directory_tree(segments[root], tree_files, root)
     return segments
 
 
