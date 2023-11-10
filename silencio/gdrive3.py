@@ -75,6 +75,19 @@ class DriveBot:
             self.root_id,
         ) = self.scanner.extract_filesystem(root_id)
 
+    def mkdir(self, name, parent_name=None, parent_id=None, defer=False):
+        request = self.files().create(
+            body={
+                'name': name,
+                'parents': [self._pick_id(parent_name, parent_id)],
+                'mimeType': 'application/vnd.google-apps.folder',
+            },
+            **self.extra_parameters
+        )
+        if defer is False:
+            return request.execute()
+        return request
+
     def ls(self, folder_name=None, folder_id=None, return_collisions=False):
         folder_name, folder_id = self._pick_name_id(folder_name, folder_id)
         if folder_id is not None:
