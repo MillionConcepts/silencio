@@ -1,18 +1,18 @@
-import re
 from csv import DictReader
 from functools import partial
 from io import BytesIO
 from operator import attrgetter
 from pathlib import Path
-from typing import Callable, Iterator, Sequence, Optional, Mapping, Union
+import re
+from typing import Callable, Iterator, Optional, Sequence, Union
 
 from cytoolz import first, keyfilter
 from dustgoggles.pivot import split_on
 import googleapiclient.discovery as discovery
-import pandas as pd
 from googleapiclient.errors import BatchError
 from googleapiclient.http import MediaInMemoryUpload, MediaFileUpload
 from oauth2client.client import AssertionCredentials
+import pandas as pd
 import sh
 
 from silencio.treeutils import (
@@ -28,7 +28,7 @@ MIMETYPE = re.compile(r"\s+(\w+/\w+)\n")
 
 def infer_mimetype(path: Union[str, Path]) -> str:
     try:
-        return re.search(MIMETYPE, sh.file(str(path), mime_type=True)).group(1)
+        return MIMETYPE.search(sh.file(str(path), mime_type=True)).group(1)
     except AttributeError:
         return "application/octet-stream"
 
@@ -78,30 +78,45 @@ class DriveBot:
     def mkdir(self, name, parent_name=None, parent_id=None, defer=False):
         request = self.files().create(
             body={
-                'name': name,
-                'parents': [self._pick_id(parent_name, parent_id)],
-                'mimeType': 'application/vnd.google-apps.folder',
+                "name": name,
+                "parents": [self._pick_id(parent_name, parent_id)],
+                "mimeType": "application/vnd.google-apps.folder",
             },
-            **self.extra_parameters
+            **self.extra_parameters,
+            fields="id"
         )
         if defer is False:
             return request.execute()
         return request
 
-    def ls(self, folder_name=None, folder_id=None, return_collisions=False):
+    def cd(self, parent_id, name):
+        existing = self.ls(folder_id=parent_id)
+        if name in existing.keys():
+            return existing[name]
+        return self.mkdir(name, parent_id=parent_id)['id']
+
+    def manifest(self, folder_id, fields=None):
+        kwargs = {'query': f"'{folder_id}' in parents and trashed=false"}
+        if fields is not None:
+            kwargs['fields'] = fields
+        scanner = DriveScanner(self, **kwargs)
+        scanner.get()
+        try:
+            return scanner.make_manifest()[1]
+        except NoResultsError:
+            return pd.DataFrame(columns=scanner.fields)
+
+    def ls(self, folder_name=None, folder_id=None):
         folder_name, folder_id = self._pick_name_id(folder_name, folder_id)
         if folder_id is not None:
-            files, collisions, root_id = DriveScanner(
-                self, f"'{folder_id}' in parents and trashed=false"
-            ).extract_filesystem()
-        else:
-            files = ls_fs_dict(folder_name, self.filesystem)
-            collisions = None
-            if return_collisions is True:
-                collisions = ls_fs_dict(folder_name, self.collisions)
-        if return_collisions is True:
-            return files, collisions
-        return files
+            scanner = DriveScanner(
+                self,
+                f"'{folder_id}' in parents and trashed=false",
+                fields=("name", "id")
+            )
+            scanner.get()
+            return {f['name']: f['id'] for f in scanner.results}
+        return ls_fs_dict(folder_name, self.filesystem)
 
     def find(self, folder_name=None, folder_id=None, regex=None):
         raise NotImplementedError
@@ -178,9 +193,7 @@ class DriveBot:
                 media_body=csv_body,
             )
         else:
-            request = self.files().update(
-                fileId=file_id, media_body=csv_body
-            )
+            request = self.files().update(fileId=file_id, media_body=csv_body)
         if defer is True:
             return request
         return request.execute()
@@ -191,16 +204,14 @@ class DriveBot:
         folder_name: Optional[str] = None,
         folder_id: Optional[str] = None,
         defer: bool = False,
-        mimetype: Optional[str] = None
+        mimetype: Optional[str] = None,
     ):
         folder_id = self._pick_id(folder_name, folder_id)
         mimetype = mimetype if mimetype is not None else infer_mimetype(source)
         request = self.files().create(
-            body={
-                 'name': Path(source).name, 'parents': [folder_id]
-            },
+            body={"name": Path(source).name, "parents": [folder_id]},
             media_body=MediaFileUpload(source, mimetype=mimetype),
-            **self.extra_parameters
+            **self.extra_parameters,
         )
         if defer is True:
             return request
@@ -212,27 +223,45 @@ class DriveBot:
         file_id: Optional[str] = None,
         folder_name: Optional[str] = None,
         folder_id: Optional[str] = None,
-        defer: bool = False
+        defer: bool = False,
     ):
         file_id = self._pick_id(name, file_id)
         folder_id = self._pick_id(folder_name, folder_id)
-        parameters = {'addParents': folder_id, 'fileId': file_id}
+        parameters = {"addParents": folder_id, "fileId": file_id}
         if name is not None:
             try:
-                parameters['removeParents'] = str(Path(self.filesystem[name]).parent)
+                parameters["removeParents"] = str(
+                    Path(self.filesystem[name]).parent
+                )
             except KeyError:
                 pass
-        if 'removeParents' not in parameters:
+        if "removeParents" not in parameters:
             request = self.files().get(
-                fileId=file_id,
-                fields='parents',
-                **self.extra_parameters
+                fileId=file_id, fields="parents", **self.extra_parameters
             )
-            parameters['removeParents'] = request.execute()['parents'][0]
+            parameters["removeParents"] = request.execute()["parents"][0]
         request = self.files().update(**parameters, **self.extra_parameters)
         if defer is True:
             return request
         return request.execute()
+
+    def get_checksums(self, folder_id, files=None):
+        manifest = self.manifest(
+            folder_id,
+            ('name', 'id', 'md5Checksum', 'parents', 'mimeType', 'createdTime')
+        )
+        if len(manifest) == 0:
+            return {}
+        files = manifest['name'].tolist() if files is None else files
+        return {
+            f['name']: {
+                'id': f['id'],
+                'md5': f['md5Checksum'],
+                'created': f['createdTime']
+            }
+            for f in manifest.to_dict('records')
+            if f['name'] in files
+        }
 
     def rm(self, name=None, file_id=None, defer=False):
         file_id = self._pick_id(name, file_id)
@@ -241,14 +270,14 @@ class DriveBot:
             return request
         return request.execute()
 
-    def add_request(self, request):
+    def add_request(self, request, callback=None, request_id=None):
         if len(self.batches) == 0:
             self.batches.append(self.new_batch_http_request())
         try:
-            self.batches[-1].add(request)
+            self.batches[-1].add(request, callback, request_id)
         except BatchError:
             self.batches.append(self.new_batch_http_request())
-            self.add_request(request)
+            self.add_request(request, callback, request_id)
 
     def execute_batches(self, clear_batches=True):
         execution = tuple(
@@ -281,6 +310,10 @@ class DriveBot:
         return name, file_id
 
 
+class NoResultsError(ValueError):
+    pass
+
+
 class DriveScanner(Iterator):
     def __init__(
         self,
@@ -304,7 +337,7 @@ class DriveScanner(Iterator):
                 "includeItemsFromAllDrives": True,
                 "supportsAllDrives": True,
                 "driveId": drivebot.shared_drive_id,
-                "corpora": "drive"
+                "corpora": "drive",
             }
             self.shared_drive_id = drivebot.shared_drive_id
         else:
@@ -337,16 +370,18 @@ class DriveScanner(Iterator):
             "q": self.query,
             "fields": f"nextPageToken, files({','.join(self.fields)})",
             "pageToken": self.page_token,
-            **self.extra_parameters
+            **self.extra_parameters,
         }
 
     def make_manifest(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        if len(self.results) == 0:
+            raise NoResultsError("No results to make into manifest.")
         manifest = pd.DataFrame.from_records(self.results)
         manifest = manifest.dropna(subset=["parents"])
         manifest["parents"] = manifest["parents"].str.join("")
         self.directories, self.files = split_on(
             manifest,
-            manifest["mimeType"] == 'application/vnd.google-apps.folder'
+            manifest["mimeType"] == "application/vnd.google-apps.folder",
         )
         return self.directories, self.files
 
@@ -361,6 +396,8 @@ class DriveScanner(Iterator):
     def extract_filesystem(self, root_id=None):
         if self.complete is False:
             self.get()
+        if len(self.results) == 0:
+            return {}, [], root_id
         if len(self.trees) == 0:
             self.get_file_trees()
         if root_id is None:
@@ -401,35 +438,3 @@ class DriveScanner(Iterator):
 
 def ls_fs_dict(folder_name, fs_dict):
     return keyfilter(lambda fn: str(Path(fn).parent) == folder_name, fs_dict)
-
-
-def copy_gdrive(
-    bot: DriveBot,
-    drive_folder_id: str,
-    patterns: Mapping[str, Union[str, re.Pattern]],
-    settings: Mapping[str, str],
-    current_path: Path = Path("."),
-) -> list[Path]:
-    contents = bot.ls(folder_id=drive_folder_id)
-    # folders, files = separate_by(contents, is_drive_folder)
-    # matcher = partial(match_drivefile_title, pattern=patterns["file"])
-    # matches = list(filter(matcher, files))
-    # saved_files = []
-    # local_path = Path(settings["local_root"], current_path)
-    # if any(matches):
-    #     os.makedirs(local_path, exist_ok=True)
-    # filenames, groups = group_files(matches)
-    # # doing this to filter duplicates -- the google drive "filesystem"
-    # # (it's not) is allowed duplicate "titles", but our local filesystem of
-    # # course is not
-    # for fn, group in zip(filenames, groups):
-    #     saved_files += process_match_group(fn, group, current_path, settings)
-    # if local_path.exists() and (settings["remove_extras"] is True):
-    #     delete_extras(filenames, local_path)
-    # for folder in folders:
-    #     path = Path(current_path, folder["title"])
-    #     if "folder" in patterns.keys():
-    #         if not re.match(patterns["folder"], str(path)):
-    #             continue
-    #     saved_files += copy_gdrive(bot, folder["id"], patterns, settings, path)
-    # return saved_files

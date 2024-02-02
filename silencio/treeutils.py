@@ -1,10 +1,10 @@
 from collections import defaultdict
 from functools import partial
 from random import choice
-from typing import Mapping, Any
+from typing import Any, Mapping
 
+from cytoolz import keyfilter, valfilter
 import pandas as pd
-from cytoolz import valfilter, keyfilter
 
 
 def make_drive_adjacency_list(directories: pd.DataFrame):
