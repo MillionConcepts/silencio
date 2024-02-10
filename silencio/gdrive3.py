@@ -1,6 +1,7 @@
 from csv import DictReader
 from functools import cache, partial
 from io import BytesIO
+import json
 from operator import attrgetter
 from pathlib import Path
 import re
@@ -33,6 +34,11 @@ def infer_mimetype(path: Union[str, Path]) -> str:
         return "application/octet-stream"
 
 
+class ExecutionError(Exception):
+    """executing a batch failed."""
+    pass
+
+
 class DriveResource(discovery.Resource):
     about: Callable
     files: Callable
@@ -56,6 +62,7 @@ class DriveBot:
             self.extra_parameters = {"supportsAllDrives": True}
         else:
             self.extra_parameters = {}
+        self.errors = []
         self.scanner = DriveScanner(self)
         self.temp_filesystem = {}
 
@@ -90,11 +97,16 @@ class DriveBot:
         return request
 
     @cache
-    def cd(self, parent_id, name):
+    def cd(self, parent_id, name, mkdir=True):
         existing = self.ls(folder_id=parent_id)
+        # TODO: check if this is actually a folder
         if name in existing.keys():
             return existing[name]
-        return self.mkdir(name, parent_id=parent_id)['id']
+        if mkdir is True:
+            return self.mkdir(name, parent_id=parent_id)['id']
+        raise FileNotFoundError(
+            f"{name} does not exist in {parent_id} & mkdir is False"
+        )
 
     def manifest(self, folder_id, fields=None):
         kwargs = {'query': f"'{folder_id}' in parents and trashed=false"}
@@ -103,7 +115,7 @@ class DriveBot:
         scanner = DriveScanner(self, **kwargs)
         scanner.get()
         try:
-            return scanner.make_manifest()[1]
+            return scanner.make_manifest()[0]
         except NoResultsError:
             return pd.DataFrame(columns=scanner.fields)
 
@@ -273,25 +285,34 @@ class DriveBot:
         if len(manifest) == 0:
             return {}
         files = manifest['name'].tolist() if files is None else files
-        return {
-            f['name']: {
+        checksums = {}
+        for f in manifest.to_dict('records'):
+            if (name := f['name']) not in files:
+                continue
+            # if someone has thrown a Google Workspace object in the folder,
+            # it won't have a checksum, and we never, ever care about it
+            # in a situation where we are producing checksums
+            if (checksum := f.get('md5Checksum')) is None:
+                continue
+            checksums[name] = {
                 'id': f['id'],
-                'md5': f['md5Checksum'],
+                'md5': f.get('md5Checksum'),
                 'created': f['createdTime']
             }
-            for f in manifest.to_dict('records')
-            if f['name'] in files
-        }
+        return checksums
 
     def rm(self, name=None, file_id=None, defer=False):
         file_id = self._pick_id(name, file_id)
-        request = self.files().delete(fileId=file_id)
+        request = self.files().delete(fileId=file_id, **self.extra_parameters)
         if defer is True:
             return request
         return request.execute()
 
     def add_request(self, request, callback=None, request_id=None):
-        if len(self.batches) == 0:
+        if (
+            len(self.batches) == 0
+            or len(self.batches[-1]._requests) >= 100
+        ):
             self.batches.append(self.new_batch_http_request())
         try:
             self.batches[-1].add(request, callback, request_id)
@@ -299,10 +320,33 @@ class DriveBot:
             self.batches.append(self.new_batch_http_request())
             self.add_request(request, callback, request_id)
 
-    def execute_batches(self, clear_batches=True):
+    def execute_batches(self, clear_batches=True, raise_errors=True):
+        # TODO: add an HTTPError catch, not sure which kind
         execution = tuple(
             map(lambda x: x(), map(attrgetter("execute"), self.batches))
         )
+        for batchnum, batch in enumerate(self.batches):
+            for reqix, (meta, response) in batch._responses.items():
+                response = response.decode('utf-8')
+                if len(response) > 0:
+                    response = json.loads(response)
+                else:
+                    response = {}
+                error = response.get('error')
+                status = meta['status']
+                if (error is not None) or (status != '204'):
+                    err_rec = {
+                        'request': json.loads(
+                            self.batches[batchnum]._requests[reqix].to_json()
+                        ),
+                        'status': status,
+                        'response': response,
+                        'error': error,
+                        'batchnum': batchnum
+                    }
+                    self.errors.append(err_rec)
+        if len(self.errors) > 0 and raise_errors is True:
+            raise ExecutionError("some requests failed. check self.errors.")
         if clear_batches:
             self.batches = []
         return execution
