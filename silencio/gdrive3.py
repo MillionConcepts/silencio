@@ -114,10 +114,7 @@ class DriveBot:
             kwargs['fields'] = fields
         scanner = DriveScanner(self, **kwargs)
         scanner.get()
-        try:
-            return scanner.make_manifest()[0]
-        except NoResultsError:
-            return pd.DataFrame(columns=scanner.fields)
+        return scanner.make_manifest()
 
     def ls(self, folder_name=None, folder_id=None):
         folder_name, folder_id = self._pick_name_id(folder_name, folder_id)
@@ -179,6 +176,10 @@ class DriveBot:
         if defer is True:
             return request
         return request.execute()
+
+    def get(self, file_id, target_file):
+        with open(target_file, "wb") as stream:
+            stream.write(self.read_file(file_id))
 
     # TODO: allow updating an existing file by path name
     def df_to_drive_csv(
@@ -439,7 +440,10 @@ class DriveScanner(Iterator):
 
     def make_manifest(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         if len(self.results) == 0:
-            raise NoResultsError("No results to make into manifest.")
+            return (
+                pd.DataFrame(columns=self.fields),
+                pd.DataFrame(columns=self.fields)
+            )
         manifest = pd.DataFrame.from_records(self.results)
         manifest = manifest.dropna(subset=["parents"])
         manifest["parents"] = manifest["parents"].str.join("")
