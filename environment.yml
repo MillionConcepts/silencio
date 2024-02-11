@@ -2,10 +2,11 @@ name: silencio
 channels:
   - conda-forge
 dependencies:
-  - python=3.9
+  - python>=3.9
   - cytoolz
-  - pip
-  - pydrive2
+  - dustgoggles
+  - google-api-python-client
+  - oauth2client
+  - pandas
   - python-dateutil
-  - pip:
-      - git+https://github.com/MillionConcepts/dustgoggles.git
+  - sh

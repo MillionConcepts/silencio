@@ -1,9 +1,10 @@
 # silencio
 
-Occasional utilities for high-level interfaces to networking APIs.
+High-level interfaces to Google Drive.
 
-This code should be considered unstable and we do not particularly recommend its use for any purpose.
+This code is 'occasional'; features exist as we need them for particular
+purposes. We make no claims about general utility.
 
 ## licensing
 
-This code carries a BSD 3-Clause license. You can do nearly anything that you want with it. We do, again, urge caution.
+This code carries a BSD 3-Clause license. You can do nearly anything that you want with it.
