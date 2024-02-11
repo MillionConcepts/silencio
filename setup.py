@@ -11,10 +11,15 @@ setup(
     url="https://github.com/millionconcepts/silencio.git",
     author="Million Concepts",
     author_email="mstclair@millionconcepts.com",
-    description="Google Drive interfaces.",
+    description="Occasional google Drive interfaces.",
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[
-        "dustgoggles", "pip", "python-dateutil"
+        "dustgoggles",
+        "google-api-python-client",
+        "oauth2client",
+        "pandas",
+        "pip",
+        "python-dateutil"
     ],
 )
