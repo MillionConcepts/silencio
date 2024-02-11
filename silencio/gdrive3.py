@@ -279,7 +279,7 @@ class DriveBot:
         return request.execute()
 
     def get_checksums(self, folder_id, files=None):
-        manifest = self.manifest(
+        _folders, manifest = self.manifest(
             folder_id,
             ('name', 'id', 'md5Checksum', 'parents', 'mimeType', 'createdTime')
         )
