@@ -335,7 +335,7 @@ class DriveBot:
                     response = {}
                 error = response.get('error')
                 status = meta['status']
-                if (error is not None) or (status != '204'):
+                if (error is not None) or (not status[0] == '2'):
                     err_rec = {
                         'request': json.loads(
                             self.batches[batchnum]._requests[reqix].to_json()
