@@ -12,7 +12,7 @@ from dustgoggles.pivot import split_on
 import googleapiclient.discovery as discovery
 from googleapiclient.errors import BatchError
 from googleapiclient.http import MediaInMemoryUpload, MediaFileUpload
-from oauth2client.client import AssertionCredentials
+from google.oauth2.service_account import Credentials
 import pandas as pd
 import sh
 
@@ -46,7 +46,7 @@ class DriveResource(discovery.Resource):
 
 
 class DriveBot:
-    def __init__(self, creds: AssertionCredentials, shared_drive_id=None):
+    def __init__(self, creds: Credentials, shared_drive_id=None):
         self.resource: DriveResource = discovery.build(
             "drive", "v3", credentials=creds
         )
